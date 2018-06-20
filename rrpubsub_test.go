@@ -3,6 +3,7 @@ package rrpubsub
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/cheekybits/is"
 )
@@ -15,7 +16,12 @@ func TestConn(t *testing.T) {
 	c := New(ctx, "tcp", "localhost:6379")
 	is.NotNil(c)
 	is.NoErr(c.Close())
+}
 
+func TestConnChannels(t *testing.T) {
+	is := is.New(t)
+
+	ctx := context.Background()
 	c, err := NewURL(ctx, "redis://localhost:6379")
 	is.NoErr(err)
 	is.NotNil(c)
@@ -36,6 +42,8 @@ func TestConn(t *testing.T) {
 	is.Equal(len(c.channels), 0)
 
 	is.NoErr(c.Close())
+
+	time.Sleep(2 * time.Second)
 
 	_, ok := <-c.Messages
 	is.False(ok)
