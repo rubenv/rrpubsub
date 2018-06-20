@@ -1,33 +1,70 @@
 package rrpubsub
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/url"
 	"regexp"
 	"strconv"
-	"time"
+	"sync"
 
 	"github.com/gomodule/redigo/redis"
+	"github.com/kr/pretty"
+)
+
+type state int
+
+const (
+	disconnected state = iota
 )
 
 type Conn struct {
+	// Received messages will be placed in this channel
+	Messages chan redis.Message
+
 	network string
 	address string
 	options []redis.DialOption
+
+	lock     sync.Mutex
+	channels map[string]interface{}
+
+	commands chan []string
+
+	state state
+
+	ctx context.Context
+	cf  context.CancelFunc
+	wg  sync.WaitGroup
 }
 
+/*
+TODO:
 type Dialer interface {
 }
+*/
 
 // New returns a new connection that will use the given network and address with the
 // specified options.
-func New(network, address string, options ...redis.DialOption) *Conn {
-	return &Conn{
-		network: network,
-		address: address,
-		options: options,
+func New(ctx context.Context, network, address string, options ...redis.DialOption) *Conn {
+	ctx, cf := context.WithCancel(ctx)
+	c := &Conn{
+		Messages: make(chan redis.Message, 100),
+
+		network:  network,
+		address:  address,
+		options:  options,
+		channels: make(map[string]interface{}),
+		commands: make(chan []string, 10),
+		state:    disconnected,
+
+		ctx: ctx,
+		cf:  cf,
 	}
+	c.wg.Add(1)
+	go c.run()
+	return c
 }
 
 var pathDBRegexp = regexp.MustCompile(`/(\d*)\z`)
@@ -35,7 +72,7 @@ var pathDBRegexp = regexp.MustCompile(`/(\d*)\z`)
 // NewURL returns a new connection that will connect using the Redis URI
 // scheme. URLs should follow the draft IANA specification for the scheme
 // (https://www.iana.org/assignments/uri-schemes/prov/redis).
-func NewURL(rawurl string, options ...redis.DialOption) (*Conn, error) {
+func NewURL(ctx context.Context, rawurl string, options ...redis.DialOption) (*Conn, error) {
 	u, err := url.Parse(rawurl)
 	if err != nil {
 		return nil, err
@@ -83,10 +120,76 @@ func NewURL(rawurl string, options ...redis.DialOption) (*Conn, error) {
 
 	options = append(options, redis.DialUseTLS(u.Scheme == "rediss"))
 
-	return New("tcp", address, options...), nil
+	return New(ctx, "tcp", address, options...), nil
 }
 
+// Implements the main state machine and interacts with the underlying
+// connection
+func (c *Conn) run() {
+	defer c.wg.Done()
+	defer close(c.Messages)
+
+	done := c.ctx.Done()
+	for {
+		select {
+		case <-done:
+			return
+		case cmd := <-c.commands:
+			switch c.state {
+			case disconnected:
+				// Do nothing!
+			default:
+				pretty.Log(cmd)
+				panic(fmt.Sprintf("No idea what to do with state %#v!", c.state))
+			}
+		}
+	}
+}
+
+/*
+TODO
 // NewConn returns a new rrpubsub connection for the given net connection.
 func NewDialer(dialer Dialer, readTimeout, writeTimeout time.Duration) Conn {
 	panic("Not implemented")
+}
+*/
+
+// Close closes the connection.
+func (c *Conn) Close() error {
+	c.cf()
+	c.wg.Wait()
+	return nil
+}
+
+// Subscribe subscribes the connection to the specified channels.
+func (c *Conn) Subscribe(channel ...string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	for _, ch := range channel {
+		c.channels[ch] = struct{}{}
+	}
+
+	cmd := []string{"SUBSCRIBE"}
+	cmd = append(cmd, channel...)
+	c.commands <- cmd
+}
+
+// Unsubscribe unsubscribes the connection from the given channels, or from all
+// of them if none is given.
+func (c *Conn) Unsubscribe(channel ...string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	if len(channel) == 0 {
+		c.channels = make(map[string]interface{})
+	} else {
+		for _, ch := range channel {
+			delete(c.channels, ch)
+		}
+	}
+
+	cmd := []string{"UNSUBSCRIBE"}
+	cmd = append(cmd, channel...)
+	c.commands <- cmd
 }
