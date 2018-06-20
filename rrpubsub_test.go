@@ -3,6 +3,7 @@ package rrpubsub
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/cheekybits/is"
 )
@@ -44,4 +45,62 @@ func TestConnChannels(t *testing.T) {
 
 	_, ok := <-c.Messages
 	is.False(ok)
+}
+
+func TestConnReceive(t *testing.T) {
+	is := is.New(t)
+
+	s, err := newTestServer()
+	is.NoErr(err)
+	defer s.Kill()
+
+	ctx := context.Background()
+
+	c := New(ctx, "tcp", s.address)
+	is.NotNil(c)
+
+	c.Subscribe("test")
+
+	time.Sleep(1 * time.Second)
+
+	is.NoErr(s.Send("test", "1"))
+
+	msg, ok := <-c.Messages
+	is.True(ok)
+	is.NotNil(msg)
+
+	is.NoErr(c.Close())
+	_, ok = <-c.Messages
+	is.False(ok)
+}
+
+func TestConnMessages(t *testing.T) {
+	is := is.New(t)
+
+	s, err := newTestServer()
+	is.NoErr(err)
+	defer s.Kill()
+
+	ctx := context.Background()
+
+	c := New(ctx, "tcp", s.address)
+	is.NotNil(c)
+
+	c.Subscribe("test")
+
+	time.Sleep(1 * time.Second)
+
+	s.Restart()
+
+	c.Subscribe("test2")
+
+	time.Sleep(1 * time.Second)
+
+	is.NoErr(s.Send("test", "1"))
+
+	time.Sleep(1 * time.Second)
+	is.NoErr(s.Send("test2", "2"))
+
+	time.Sleep(1 * time.Second)
+	is.NoErr(c.Close())
 }

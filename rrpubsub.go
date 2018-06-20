@@ -3,22 +3,17 @@ package rrpubsub
 import (
 	"context"
 	"fmt"
-	"log"
-	"net"
-	"net/url"
-	"regexp"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/gomodule/redigo/redis"
-	"github.com/kr/pretty"
 )
 
 type state int
 
 const (
-	disconnected state = iota
+	initial state = iota
+	disconnected
 	connected
 )
 
@@ -27,6 +22,7 @@ type eventType int
 const (
 	connectedEvent eventType = iota
 	disconnectedEvent
+	messageEvent
 )
 
 type command struct {
@@ -35,7 +31,10 @@ type command struct {
 }
 
 type event struct {
-	t eventType
+	t   eventType
+	c   *redisConn
+	msg redis.Message
+	err error
 }
 
 const (
@@ -43,6 +42,8 @@ const (
 	redisReadTimeout    time.Duration = 10 * time.Second
 	redisWriteTimeout   time.Duration = 5 * time.Second
 )
+
+type logger func(msg string)
 
 type Conn struct {
 	// Received messages will be placed in this channel
@@ -64,18 +65,11 @@ type Conn struct {
 	cf  context.CancelFunc
 	wg  sync.WaitGroup
 
-	conn    redis.Conn
-	pubsub  redis.PubSubConn
+	conn    *redisConn
 	backoff time.Duration
 
-	debug bool
+	debug logger
 }
-
-/*
-TODO:
-type Dialer interface {
-}
-*/
 
 // New returns a new connection that will use the given network and address with the
 // specified options.
@@ -98,12 +92,10 @@ func New(ctx context.Context, network, address string, options ...redis.DialOpti
 		channels: make(map[string]interface{}),
 		commands: make(chan command, 10),
 		events:   make(chan event, 10),
-		state:    disconnected,
+		state:    initial,
 
 		ctx: ctx,
 		cf:  cf,
-
-		debug: true,
 	}
 	c.wg.Add(1)
 
@@ -112,65 +104,9 @@ func New(ctx context.Context, network, address string, options ...redis.DialOpti
 
 	// Initially disconnected
 	c.logDebug("Sending disconnected")
-	c.events <- event{disconnectedEvent}
+	c.events <- event{t: disconnectedEvent}
 
 	return c
-}
-
-var pathDBRegexp = regexp.MustCompile(`/(\d*)\z`)
-
-// NewURL returns a new connection that will connect using the Redis URI
-// scheme. URLs should follow the draft IANA specification for the scheme
-// (https://www.iana.org/assignments/uri-schemes/prov/redis).
-func NewURL(ctx context.Context, rawurl string, options ...redis.DialOption) (*Conn, error) {
-	u, err := url.Parse(rawurl)
-	if err != nil {
-		return nil, err
-	}
-
-	if u.Scheme != "redis" && u.Scheme != "rediss" {
-		return nil, fmt.Errorf("invalid redis URL scheme: %s", u.Scheme)
-	}
-
-	// As per the IANA draft spec, the host defaults to localhost and
-	// the port defaults to 6379.
-	host, port, err := net.SplitHostPort(u.Host)
-	if err != nil {
-		// assume port is missing
-		host = u.Host
-		port = "6379"
-	}
-	if host == "" {
-		host = "localhost"
-	}
-	address := net.JoinHostPort(host, port)
-
-	if u.User != nil {
-		password, isSet := u.User.Password()
-		if isSet {
-			options = append(options, redis.DialPassword(password))
-		}
-	}
-
-	match := pathDBRegexp.FindStringSubmatch(u.Path)
-	if len(match) == 2 {
-		db := 0
-		if len(match[1]) > 0 {
-			db, err = strconv.Atoi(match[1])
-			if err != nil {
-				return nil, fmt.Errorf("invalid database: %s", u.Path[1:])
-			}
-		}
-		if db != 0 {
-			options = append(options, redis.DialDatabase(db))
-		}
-	} else if u.Path != "" {
-		return nil, fmt.Errorf("invalid database: %s", u.Path[1:])
-	}
-
-	options = append(options, redis.DialUseTLS(u.Scheme == "rediss"))
-
-	return New(ctx, "tcp", address, options...), nil
 }
 
 // Implements the main state machine and interacts with the underlying
@@ -193,38 +129,33 @@ func (c *Conn) run() {
 				// Do nothing!
 
 			case connected:
-				c.sendCommand(cmd)
-
-			default:
-				panic(fmt.Sprintf("No idea what to do with state %#v!", c.state))
+				c.logDebug("CMD: %s, %#v", cmd.cmd, cmd.args)
+				c.conn.Do(cmd)
 			}
 
 		case ev := <-c.events:
-			pretty.Log(ev)
 			switch ev.t {
 			case connectedEvent:
 				c.logDebug("Connected, subscribing to channels...")
+				c.state = connected
+				c.backoff = 0
 				c.subscribeChannels()
 
 			case disconnectedEvent:
-				c.flushCommands()
-				c.connect()
+				if ev.c == c.conn {
+					if ev.err != nil {
+						c.logDebug("Disconnected: %s", ev.err.Error())
+					}
+					c.state = disconnected
+					c.flushCommands()
+					c.closeConnection()
+					c.connect()
+				}
+
+			case messageEvent:
+				c.Messages <- ev.msg
 			}
 		}
-	}
-}
-
-func (c *Conn) sendCommand(cmd command) {
-	err := c.conn.Send(cmd.cmd, sToI(cmd.args))
-	if err != nil {
-		c.disconnected(err)
-		return
-	}
-
-	err = c.conn.Flush()
-	if err != nil {
-		c.disconnected(err)
-		return
 	}
 }
 
@@ -253,44 +184,28 @@ func (c *Conn) subscribeChannels() {
 	}
 }
 
-func (c *Conn) connect() {
-	c.logDebug("Attempting to connect (sleeping %s)", c.backoff)
-	time.Sleep(c.backoff)
-
-	conn, err := redis.Dial(c.network, c.address, c.options...)
-	if err != nil {
-		c.disconnected(err)
-		return
-	}
-
-	pubsub := redis.PubSubConn{Conn: conn}
-
-	c.conn = conn
-	c.pubsub = pubsub
-	c.backoff = 0
-
-	c.events <- event{connectedEvent}
-}
-
-func (c *Conn) disconnected(err error) {
-	c.logDebug("Disconnected: %s", err.Error())
-
+func (c *Conn) closeConnection() {
 	if c.conn != nil {
 		c.conn.Close()
 		c.conn = nil
 	}
-
-	c.backoff += 100 * time.Millisecond
-	c.events <- event{disconnectedEvent}
 }
 
-/*
-TODO
-// NewConn returns a new rrpubsub connection for the given net connection.
-func NewDialer(dialer Dialer, readTimeout, writeTimeout time.Duration) Conn {
-	panic("Not implemented")
+func (c *Conn) connect() {
+	if c.state == connected {
+		return
+	}
+
+	c.logDebug("Attempting to connect (sleeping %s)", c.backoff)
+
+	time.Sleep(c.backoff)
+	if c.backoff < 1*time.Second {
+		c.backoff += 100 * time.Millisecond
+	}
+
+	c.conn = newRedisConn(c.ctx, c.network, c.address, c.options, c.events)
+	go c.conn.Run()
 }
-*/
 
 // Close closes the connection.
 func (c *Conn) Close() error {
@@ -335,7 +250,7 @@ func (c *Conn) Unsubscribe(channel ...string) {
 }
 
 func (c *Conn) logDebug(msg string, args ...interface{}) {
-	if c.debug {
-		log.Printf(msg, args...)
+	if c.debug != nil {
+		c.debug(fmt.Sprintf(msg, args...))
 	}
 }
