@@ -46,7 +46,7 @@ func (r *redisConn) Run() {
 			select {
 			case <-done:
 				return
-			case <-time.After(1 * time.Second):
+			case <-time.After(redisPingInterval):
 				pubsub.Ping(time.Now().Format(time.RFC3339))
 			}
 		}
@@ -59,7 +59,7 @@ func (r *redisConn) Run() {
 		default:
 		}
 
-		switch v := pubsub.Receive().(type) {
+		switch v := pubsub.ReceiveWithTimeout(2 * redisPingInterval).(type) {
 		case redis.Message:
 			r.events <- event{
 				t:   messageEvent,

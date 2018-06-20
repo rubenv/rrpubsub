@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/cheekybits/is"
+	"github.com/gomodule/redigo/redis"
 )
 
 func TestConn(t *testing.T) {
@@ -103,4 +104,37 @@ func TestConnMessages(t *testing.T) {
 
 	time.Sleep(1 * time.Second)
 	is.NoErr(c.Close())
+}
+
+func TestConnFreeze(t *testing.T) {
+	is := is.New(t)
+
+	s, err := newTestServer()
+	is.NoErr(err)
+	defer s.Kill()
+
+	ctx := context.Background()
+
+	c := New(ctx, "tcp", s.address, redis.DialReadTimeout(redisReadTimeout))
+	is.NotNil(c)
+
+	s.Freeze()
+
+	c.Subscribe("test")
+
+	time.Sleep(3 * time.Second)
+
+	s.Continue()
+
+	is.NoErr(s.Send("test", "1"))
+
+	msg, ok := <-c.Messages
+	is.True(ok)
+	is.NotNil(msg)
+	is.Equal(msg.Channel, "test")
+	is.Equal(msg.Data, "1")
+
+	is.NoErr(c.Close())
+	_, ok = <-c.Messages
+	is.False(ok)
 }

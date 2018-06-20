@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/gomodule/redigo/redis"
@@ -73,4 +74,16 @@ func (s *testServer) Send(ch, msg string) error {
 	//	log.Printf("PUBLISH: %s %s", ch, msg)
 	_, err = c.Do("PUBLISH", ch, msg)
 	return err
+}
+
+func (s *testServer) Freeze() {
+	if s.cmd != nil {
+		s.cmd.Process.Signal(syscall.SIGSTOP)
+	}
+}
+
+func (s *testServer) Continue() {
+	if s.cmd != nil {
+		s.cmd.Process.Signal(syscall.SIGCONT)
+	}
 }

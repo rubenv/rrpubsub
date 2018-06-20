@@ -38,6 +38,7 @@ type event struct {
 }
 
 const (
+	redisPingInterval   time.Duration = 1 * time.Second
 	redisConnectTimeout time.Duration = 5 * time.Second
 	redisReadTimeout    time.Duration = 10 * time.Second
 	redisWriteTimeout   time.Duration = 5 * time.Second
