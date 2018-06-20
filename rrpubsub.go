@@ -217,12 +217,14 @@ func (c *Conn) run() {
 func (c *Conn) sendCommand(cmd command) {
 	err := c.conn.Send(cmd.cmd, sToI(cmd.args))
 	if err != nil {
-		panic(err)
+		c.disconnected(err)
+		return
 	}
 
 	err = c.conn.Flush()
 	if err != nil {
-		panic(err)
+		c.disconnected(err)
+		return
 	}
 }
 

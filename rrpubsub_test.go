@@ -3,7 +3,6 @@ package rrpubsub
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/cheekybits/is"
 )
@@ -42,8 +41,6 @@ func TestConnChannels(t *testing.T) {
 	is.Equal(len(c.channels), 0)
 
 	is.NoErr(c.Close())
-
-	time.Sleep(2 * time.Second)
 
 	_, ok := <-c.Messages
 	is.False(ok)
