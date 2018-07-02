@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-func ExampleConnection() {
+func ExampleConn() {
 	ctx := context.Background()
 	conn := New(ctx, "tcp", "localhost:6379")
 	conn.Subscribe("mychannel")
