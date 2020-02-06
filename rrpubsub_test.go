@@ -5,87 +5,87 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cheekybits/is"
 	"github.com/gomodule/redigo/redis"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestConn(t *testing.T) {
-	is := is.New(t)
+	assert := assert.New(t)
 
 	ctx := context.Background()
 
 	c := New(ctx, "tcp", "localhost:6379")
-	is.NotNil(c)
-	is.NoErr(c.Close())
+	assert.NotNil(c)
+	assert.NoError(c.Close())
 }
 
 func TestConnChannels(t *testing.T) {
-	is := is.New(t)
+	assert := assert.New(t)
 
 	ctx := context.Background()
 	c, err := NewURL(ctx, "redis://localhost:6379")
-	is.NoErr(err)
-	is.NotNil(c)
+	assert.NoError(err)
+	assert.NotNil(c)
 
 	c.Subscribe("test")
-	is.Equal(len(c.channels), 1)
+	assert.Equal(len(c.channels), 1)
 
 	c.Unsubscribe("test")
-	is.Equal(len(c.channels), 0)
+	assert.Equal(len(c.channels), 0)
 
 	c.Subscribe("test", "test2", "test3")
-	is.Equal(len(c.channels), 3)
+	assert.Equal(len(c.channels), 3)
 
 	c.Unsubscribe("test")
-	is.Equal(len(c.channels), 2)
+	assert.Equal(len(c.channels), 2)
 
 	c.Unsubscribe()
-	is.Equal(len(c.channels), 0)
+	assert.Equal(len(c.channels), 0)
 
-	is.NoErr(c.Close())
+	assert.NoError(c.Close())
 
 	_, ok := <-c.Messages
-	is.False(ok)
+	assert.False(ok)
 }
 
 func TestConnReceive(t *testing.T) {
-	is := is.New(t)
+	assert := assert.New(t)
 
 	s, err := newTestServer()
-	is.NoErr(err)
+	assert.NoError(err)
 	defer s.Kill()
 
 	ctx := context.Background()
 
 	c := New(ctx, "tcp", s.address)
-	is.NotNil(c)
+	assert.NotNil(c)
 
 	c.Subscribe("test")
 
 	time.Sleep(1 * time.Second)
 
-	is.NoErr(s.Send("test", "1"))
+	assert.NoError(s.Send("test", "1"))
 
 	msg, ok := <-c.Messages
-	is.True(ok)
-	is.NotNil(msg)
+	assert.True(ok)
+	assert.NotNil(msg)
 
-	is.NoErr(c.Close())
+	assert.NoError(c.Close())
 	_, ok = <-c.Messages
-	is.False(ok)
+	assert.False(ok)
 }
 
 func TestConnMessages(t *testing.T) {
-	is := is.New(t)
+	assert := assert.New(t)
 
 	s, err := newTestServer()
-	is.NoErr(err)
+	assert.NoError(err)
 	defer s.Kill()
 
 	ctx := context.Background()
 
 	c := New(ctx, "tcp", s.address)
-	is.NotNil(c)
+	assert.NotNil(c)
 
 	c.Subscribe("test")
 
@@ -97,26 +97,26 @@ func TestConnMessages(t *testing.T) {
 
 	time.Sleep(1 * time.Second)
 
-	is.NoErr(s.Send("test", "1"))
+	assert.NoError(s.Send("test", "1"))
 
 	time.Sleep(1 * time.Second)
-	is.NoErr(s.Send("test2", "2"))
+	assert.NoError(s.Send("test2", "2"))
 
 	time.Sleep(1 * time.Second)
-	is.NoErr(c.Close())
+	assert.NoError(c.Close())
 }
 
 func TestConnFreeze(t *testing.T) {
-	is := is.New(t)
+	assert := assert.New(t)
 
 	s, err := newTestServer()
-	is.NoErr(err)
+	assert.NoError(err)
 	defer s.Kill()
 
 	ctx := context.Background()
 
 	c := New(ctx, "tcp", s.address, redis.DialReadTimeout(redisReadTimeout))
-	is.NotNil(c)
+	assert.NotNil(c)
 
 	s.Freeze()
 
@@ -126,15 +126,15 @@ func TestConnFreeze(t *testing.T) {
 
 	s.Continue()
 
-	is.NoErr(s.Send("test", "1"))
+	assert.NoError(s.Send("test", "1"))
 
 	msg, ok := <-c.Messages
-	is.True(ok)
-	is.NotNil(msg)
-	is.Equal(msg.Channel, "test")
-	is.Equal(msg.Data, "1")
+	assert.True(ok)
+	assert.NotNil(msg)
+	assert.Equal(msg.Channel, "test")
+	assert.Equal(string(msg.Data), "1")
 
-	is.NoErr(c.Close())
+	assert.NoError(c.Close())
 	_, ok = <-c.Messages
-	is.False(ok)
+	assert.False(ok)
 }
