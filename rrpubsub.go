@@ -104,6 +104,12 @@ func New(ctx context.Context, network, address string, options ...redis.DialOpti
 
 		ctx: ctx,
 		cf:  cf,
+
+		/*
+			debug: func(msg string) {
+				log.Println(msg)
+			},
+		*/
 	}
 	c.wg.Add(1)
 
@@ -190,6 +196,10 @@ func (c *conn) subscribeChannels() {
 		ch = append(ch, k)
 	}
 
+	if len(ch) == 0 {
+		return
+	}
+
 	c.commands <- command{
 		cmd:  "SUBSCRIBE",
 		args: ch,
@@ -227,17 +237,21 @@ func (c *conn) Close() error {
 }
 
 // Subscribe subscribes the connection to the specified channels.
-func (c *conn) Subscribe(channel ...string) {
+func (c *conn) Subscribe(channels ...string) {
+	if len(channels) == 0 {
+		return
+	}
+
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	for _, ch := range channel {
+	for _, ch := range channels {
 		c.channels[ch] = struct{}{}
 	}
 
 	c.commands <- command{
 		cmd:  "SUBSCRIBE",
-		args: channel,
+		args: channels,
 	}
 }
 

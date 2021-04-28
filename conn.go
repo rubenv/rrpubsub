@@ -2,6 +2,7 @@ package rrpubsub
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/gomodule/redigo/redis"
@@ -40,6 +41,8 @@ func (r *redisConn) Run() {
 
 	pubsub := redis.PubSubConn{Conn: conn}
 
+	channels := 0
+
 	done := r.ctx.Done()
 	go func() {
 		for {
@@ -47,7 +50,12 @@ func (r *redisConn) Run() {
 			case <-done:
 				return
 			case <-time.After(redisPingInterval):
-				pubsub.Ping(time.Now().Format(time.RFC3339))
+				if channels > 0 {
+					err := pubsub.Ping(time.Now().Format(time.RFC3339))
+					if err != nil {
+						r.sendErr(fmt.Errorf("Ping: %w", err))
+					}
+				}
 			}
 		}
 	}()
@@ -65,8 +73,16 @@ func (r *redisConn) Run() {
 				t:   messageEvent,
 				msg: v,
 			}
+		case redis.Subscription:
+			switch v.Kind {
+			case "subscribe":
+				channels += 1
+			case "unsubscribe":
+				channels -= 1
+			}
+
 		case error:
-			r.sendErr(v)
+			r.sendErr(fmt.Errorf("ReceiveWithTimeout: %w", v))
 			return
 		}
 	}
@@ -75,13 +91,13 @@ func (r *redisConn) Run() {
 func (r *redisConn) Do(cmd command) {
 	err := r.conn.Send(cmd.cmd, sToI(cmd.args)...)
 	if err != nil {
-		r.sendErr(err)
+		r.sendErr(fmt.Errorf("Do: %w", err))
 		return
 	}
 
 	err = r.conn.Flush()
 	if err != nil {
-		r.sendErr(err)
+		r.sendErr(fmt.Errorf("Flush: %w", err))
 		return
 	}
 }
