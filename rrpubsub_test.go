@@ -27,24 +27,26 @@ func TestConnChannels(t *testing.T) {
 	assert.NoError(err)
 	assert.NotNil(c)
 
+	conn := c.(*conn)
+
 	c.Subscribe("test")
-	assert.Equal(len(c.channels), 1)
+	assert.Equal(len(conn.channels), 1)
 
 	c.Unsubscribe("test")
-	assert.Equal(len(c.channels), 0)
+	assert.Equal(len(conn.channels), 0)
 
 	c.Subscribe("test", "test2", "test3")
-	assert.Equal(len(c.channels), 3)
+	assert.Equal(len(conn.channels), 3)
 
 	c.Unsubscribe("test")
-	assert.Equal(len(c.channels), 2)
+	assert.Equal(len(conn.channels), 2)
 
 	c.Unsubscribe()
-	assert.Equal(len(c.channels), 0)
+	assert.Equal(len(conn.channels), 0)
 
 	assert.NoError(c.Close())
 
-	_, ok := <-c.Messages
+	_, ok := <-c.Messages()
 	assert.False(ok)
 }
 
@@ -66,12 +68,12 @@ func TestConnReceive(t *testing.T) {
 
 	assert.NoError(s.Send("test", "1"))
 
-	msg, ok := <-c.Messages
+	msg, ok := <-c.Messages()
 	assert.True(ok)
 	assert.NotNil(msg)
 
 	assert.NoError(c.Close())
-	_, ok = <-c.Messages
+	_, ok = <-c.Messages()
 	assert.False(ok)
 }
 
@@ -128,13 +130,13 @@ func TestConnFreeze(t *testing.T) {
 
 	assert.NoError(s.Send("test", "1"))
 
-	msg, ok := <-c.Messages
+	msg, ok := <-c.Messages()
 	assert.True(ok)
 	assert.NotNil(msg)
 	assert.Equal(msg.Channel, "test")
 	assert.Equal(string(msg.Data), "1")
 
 	assert.NoError(c.Close())
-	_, ok = <-c.Messages
+	_, ok = <-c.Messages()
 	assert.False(ok)
 }

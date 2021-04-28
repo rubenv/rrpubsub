@@ -46,9 +46,16 @@ const (
 
 type logger func(msg string)
 
-type Conn struct {
+type Conn interface {
+	Messages() <-chan redis.Message
+	Subscribe(channel ...string)
+	Unsubscribe(channel ...string)
+	Close() error
+}
+
+type conn struct {
 	// Received messages will be placed in this channel
-	Messages chan redis.Message
+	messages chan redis.Message
 
 	network string
 	address string
@@ -74,7 +81,7 @@ type Conn struct {
 
 // New returns a new connection that will use the given network and address with the
 // specified options.
-func New(ctx context.Context, network, address string, options ...redis.DialOption) *Conn {
+func New(ctx context.Context, network, address string, options ...redis.DialOption) Conn {
 	// Default dial options
 	opts := []redis.DialOption{
 		redis.DialConnectTimeout(redisConnectTimeout),
@@ -84,8 +91,8 @@ func New(ctx context.Context, network, address string, options ...redis.DialOpti
 	opts = append(opts, options...)
 
 	ctx, cf := context.WithCancel(ctx)
-	c := &Conn{
-		Messages: make(chan redis.Message, 100),
+	c := &conn{
+		messages: make(chan redis.Message, 100),
 
 		network:  network,
 		address:  address,
@@ -110,11 +117,15 @@ func New(ctx context.Context, network, address string, options ...redis.DialOpti
 	return c
 }
 
+func (c *conn) Messages() <-chan redis.Message {
+	return c.messages
+}
+
 // Implements the main state machine and interacts with the underlying
 // connection
-func (c *Conn) run() {
+func (c *conn) run() {
 	defer c.wg.Done()
-	defer close(c.Messages)
+	defer close(c.messages)
 
 	c.logDebug("Starting main loop")
 
@@ -154,13 +165,13 @@ func (c *Conn) run() {
 				}
 
 			case messageEvent:
-				c.Messages <- ev.msg
+				c.messages <- ev.msg
 			}
 		}
 	}
 }
 
-func (c *Conn) flushCommands() {
+func (c *conn) flushCommands() {
 	for {
 		select {
 		case <-c.commands:
@@ -170,7 +181,7 @@ func (c *Conn) flushCommands() {
 	}
 }
 
-func (c *Conn) subscribeChannels() {
+func (c *conn) subscribeChannels() {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -185,14 +196,14 @@ func (c *Conn) subscribeChannels() {
 	}
 }
 
-func (c *Conn) closeConnection() {
+func (c *conn) closeConnection() {
 	if c.conn != nil {
 		c.conn.Close()
 		c.conn = nil
 	}
 }
 
-func (c *Conn) connect() {
+func (c *conn) connect() {
 	if c.state == connected {
 		return
 	}
@@ -209,14 +220,14 @@ func (c *Conn) connect() {
 }
 
 // Close closes the connection.
-func (c *Conn) Close() error {
+func (c *conn) Close() error {
 	c.cf()
 	c.wg.Wait()
 	return nil
 }
 
 // Subscribe subscribes the connection to the specified channels.
-func (c *Conn) Subscribe(channel ...string) {
+func (c *conn) Subscribe(channel ...string) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -232,7 +243,7 @@ func (c *Conn) Subscribe(channel ...string) {
 
 // Unsubscribe unsubscribes the connection from the given channels, or from all
 // of them if none is given.
-func (c *Conn) Unsubscribe(channel ...string) {
+func (c *conn) Unsubscribe(channel ...string) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -250,7 +261,7 @@ func (c *Conn) Unsubscribe(channel ...string) {
 	}
 }
 
-func (c *Conn) logDebug(msg string, args ...interface{}) {
+func (c *conn) logDebug(msg string, args ...interface{}) {
 	if c.debug != nil {
 		c.debug(fmt.Sprintf(msg, args...))
 	}

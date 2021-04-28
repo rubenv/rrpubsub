@@ -16,7 +16,7 @@ var pathDBRegexp = regexp.MustCompile(`/(\d*)\z`)
 // NewURL returns a new connection that will connect using the Redis URI
 // scheme. URLs should follow the draft IANA specification for the scheme
 // (https://www.iana.org/assignments/uri-schemes/prov/redis).
-func NewURL(ctx context.Context, rawurl string, options ...redis.DialOption) (*Conn, error) {
+func NewURL(ctx context.Context, rawurl string, options ...redis.DialOption) (Conn, error) {
 	address, opts, err := parseUrl(rawurl)
 	if err != nil {
 		return nil, err
